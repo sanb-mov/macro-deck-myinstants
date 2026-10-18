@@ -1,0 +1,54 @@
+name: Push Update to API and Notify
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        required: true
+        type: string
+        description: 'The version to push (without leading v)'
+
+jobs:
+  push-update-notify:
+    name: Push Update to API and Notify
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+
+    steps:
+      - name: Download installer from the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "v${{ inputs.version }}" --repo "${{ github.repository }}" --pattern "macro-deck-${{ inputs.version }}-win.exe" --dir "setup/Result"
+
+      - name: Read prerelease flag from the GitHub release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "is_beta=$(gh release view "v${{ inputs.version }}" --repo "${{ github.repository }}" --json isPrerelease --jq '.isPrerelease')" >> "$GITHUB_OUTPUT"
+
+      - name: Calculate File Size and Hash
+        run: |
+          FILE="setup/Result/macro-deck-${{ inputs.version }}-win.exe"
+          echo "FILE_HASH=$(sha256sum "$FILE" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "FILE_SIZE=$(stat -c%s "$FILE")" >> "$GITHUB_ENV"
+
+      - name: Push Update to the API
+        uses: Macro-Deck-App/Actions/push-to-update-api@main
+        with:
+          version: ${{ inputs.version }}
+          platform: "WinX64"
+          file-name: "macro-deck-${{ inputs.version }}-win.exe"
+          file-hash: ${{ env.FILE_HASH }}
+          file-size: ${{ env.FILE_SIZE }}
+          update-service-token: ${{ secrets.UPDATE_SERVICE_TOKEN }}
+
+      - name: Notify
+        uses: Macro-Deck-App/Actions/discord-notify-release@main
+        with:
+          version: ${{ inputs.version }}
+          is-beta: ${{ steps.release.outputs.is_beta }}
+          webhook-token: ${{ secrets.WEBHOOK_KEY }}

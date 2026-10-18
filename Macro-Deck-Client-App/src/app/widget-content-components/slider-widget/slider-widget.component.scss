@@ -1,0 +1,153 @@
+.slider-widget-wrapper {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-sizing: border-box;
+  padding: 6px 4px;
+  background-color: #232323;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+}
+
+.title {
+  flex: 0 0 auto;
+  width: 100%;
+  text-align: center;
+  color: #ffffff;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.track {
+  flex: 1 1 auto;
+  position: relative;
+  min-height: 24px;
+  margin: 8px 0;
+  background-color: #3e3e3e;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.fill {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+}
+
+.value {
+  flex: 0 0 auto;
+  color: #ffffff;
+  font-size: 0.75rem;
+}
+
+.mute {
+  flex: 0 0 auto;
+  margin-top: 6px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  background-color: #323232;
+  color: #ffffff;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.mute.muted {
+  background-color: #c83c3c;
+}
+
+/* ---------------------------------------------------------------- classic */
+
+.classic .track {
+  width: 12px;
+  border-radius: 6px;
+}
+
+.classic .fill {
+  border-radius: 6px;
+}
+
+.classic .thumb {
+  position: absolute;
+  left: -7px;
+  right: -7px;
+  height: 18px;
+  border-radius: 6px;
+  background-color: #ffffff;
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------- capsule */
+
+/* Wide pill; the fill rises inside it and is clipped by the pill's own radius. */
+.capsule .track {
+  width: 46%;
+  min-width: 22px;
+  max-width: 52px;
+  border-radius: 999px;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1.5px #464646;
+}
+
+.capsule .fill {
+  border-radius: 0;
+}
+
+.capsule .mute-icon {
+  flex: 0 0 auto;
+  margin-top: 4px;
+  color: #d0d0d0;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.capsule .mute-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.capsule .mute-icon.muted {
+  color: #e05a5a;
+}
+
+/* ------------------------------------------------------------------- knob */
+
+/* The knob is centred on the top of the fill, so at the extremes half of it would
+   spill past the track; the extra margins keep it clear of the title and the value. */
+.knob-style .track {
+  margin-top: 28px;
+  margin-bottom: 28px;
+  width: 38%;
+  min-width: 18px;
+  max-width: 40px;
+  border-radius: 10px;
+  overflow: visible;
+}
+
+.knob-style .fill {
+  border-radius: 10px;
+}
+
+.knob-style .knob {
+  position: absolute;
+  left: 50%;
+  border-radius: 50%;
+  background-color: #ffffff;
+  border: 3px solid #ffffff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .25);
+  pointer-events: none;
+}
+
+.knob-style .knob::after {
+  content: '';
+  position: absolute;
+  inset: 22%;
+  border-radius: 50%;
+  background-color: #232323;
+}

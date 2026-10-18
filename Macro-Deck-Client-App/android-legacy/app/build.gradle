@@ -1,0 +1,57 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace "com.suchbyte.macrodeck.legacy"
+
+    // compileSdk must stay modern (AGP 8 requires 34+); it does not affect
+    // which devices can install the APK -- minSdk/targetSdk do.
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.suchbyte.macrodeck.legacy"
+
+        // Android 4.2.2 == API 17.
+        minSdk 17
+        // Kept low on purpose: targeting 17 keeps the legacy permission model
+        // (no runtime permission dialogs, which do not exist on 4.2) and the
+        // legacy window/theme behaviour. This APK is meant for sideloading.
+        targetSdk 17
+
+        versionCode 1
+        versionName "3.0.0-legacy"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    signingConfigs {
+        // Android 4.2 only understands the v1 (jar) signature scheme.
+        // AGP enables v1 automatically whenever minSdk < 24, but we pin it so
+        // a future toolchain change cannot silently produce a v2-only APK
+        // that refuses to install on the target device.
+        debug {
+            enableV1Signing true
+            enableV2Signing true
+        }
+    }
+
+    lint {
+        // The app targets an API level Google's tooling no longer recommends.
+        // That is the whole point of this module, so do not fail the build on it.
+        abortOnError false
+    }
+}
+
+// No dependencies at all: no AndroidX, no support library, no WebSocket library.
+// Everything needed (org.json, android.util.Base64, javax.net.ssl) ships with
+// Android 4.2 itself, so the APK stays tiny and cannot pull in an API 19+ class.
+dependencies {
+}

@@ -1,0 +1,19 @@
+# Build output and local files
+bin/
+obj/
+node_modules/
+www/
+build/
+.gradle/
+.angular/
+.vs/
+.idea/
+*.apk
+*.aab
+*.user
+local.properties
+*.jks
+*.keystore
+
+# Portable test data (copies of a user profile, may hold credentials)
+Data/

@@ -1,0 +1,148 @@
+name: Build and Release Windows Installer
+
+on:
+  workflow_call:
+    inputs:
+      branch:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      sign:
+        required: false
+        type: boolean
+        default: true
+  workflow_dispatch:
+    inputs:
+      branch:
+        required: true
+        type: string
+        description: 'The branch to build'
+        default: 'main'
+      version:
+        required: true
+        type: string
+        description: 'The version to build'
+      sign:
+        required: false
+        type: boolean
+        description: 'Sign executables with eSigner'
+        default: true
+
+jobs:
+  build-windows-installer:
+    name: Build Windows Installer
+    runs-on: windows-latest
+    environment: production
+
+    env:
+      ISCC_PATH: 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+      INNO_SETUP_DIR: 'C:\Program Files (x86)\Inno Setup 6'
+      
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+      
+      - name: Verify Inno Setup installation
+        run: |
+            Write-Output "Inno Setup path: '${{ env.ISCC_PATH }}'"
+            if (Test-Path '${{ env.ISCC_PATH }}') {
+              Write-Output "Inno Setup is installed."
+            } else {
+              Write-Output "Inno Setup installation is not installed."
+              exit 1
+            }
+
+      - name: Inject Sentry DSN
+        shell: pwsh
+        run: |
+            $f = "src\MacroDeck\Logging\SentryConfiguration.cs"
+            (Get-Content $f) -replace '__SENTRY_DSN__', '${{ secrets.SENTRY_DSN }}' | Set-Content $f
+
+      - name: Build Macro Deck for Windows
+        run: |
+            dotnet restore "src\MacroDeck\MacroDeck.csproj"
+            dotnet build "src\MacroDeck\MacroDeck.csproj" -c Release -o "src\MacroDeck\bin\Release" -r win-x64
+            dotnet publish "src\MacroDeck\MacroDeck.csproj" -c Release -o "src\MacroDeck\bin\Publish" -r win-x64 --self-contained true -p:IncludeNativeLibrariesForSelfExtract=true
+            copy "src\MacroDeck\bin\Release\Macro Deck 2.dll" "src\MacroDeck\bin\Publish"
+        shell: cmd
+
+      - name: Sign Macro Deck executable
+        if: ${{ inputs.sign }}
+        uses: sslcom/esigner-codesign@develop
+        with:
+          command: sign
+          username: ${{ secrets.ES_USERNAME }}
+          password: ${{ secrets.ES_PASSWORD }}
+          credential_id: ${{ secrets.ES_CREDENTIAL_ID }}
+          totp_secret: ${{ secrets.ES_TOTP_SECRET }}
+          file_path: ${{ github.workspace }}\src\MacroDeck\bin\Publish\Macro Deck 2.exe
+          override: 'true'
+          malware_block: 'false'
+          environment_name: PROD
+
+      - name: Build Macro Deck installer for Windows
+        run: |
+            "${{ env.ISCC_PATH }}" /D"ApplicationVersion=${{ inputs.version }}" /F"macro-deck-${{ inputs.version }}-win" "setup\Macro Deck.iss"
+        shell: cmd
+
+      - name: Sign Macro Deck installer
+        if: ${{ inputs.sign }}
+        uses: sslcom/esigner-codesign@develop
+        with:
+          command: sign
+          username: ${{ secrets.ES_USERNAME }}
+          password: ${{ secrets.ES_PASSWORD }}
+          credential_id: ${{ secrets.ES_CREDENTIAL_ID }}
+          totp_secret: ${{ secrets.ES_TOTP_SECRET }}
+          file_path: ${{ github.workspace }}\setup\Result\macro-deck-${{ inputs.version }}-win.exe
+          override: 'true'
+          malware_block: 'false'
+          environment_name: PROD
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macro-deck-${{ inputs.version }}-win
+          path: setup\Result\macro-deck-${{ inputs.version }}-win.exe
+          if-no-files-found: error
+
+  release-windows-installer:
+    name: Release Windows Installer
+    runs-on: ubuntu-latest
+    needs: build-windows-installer
+
+    steps:
+      - name: Download installer artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macro-deck-${{ inputs.version }}-win
+          path: setup/Result
+
+      - name: Calculate File Size and Hash
+        id: filehash
+        run: |
+          $filehash = Get-FileHash -Algorithm SHA256 -Path "setup/Result/macro-deck-${{ inputs.version }}-win.exe" | ForEach-Object Hash
+          echo "FILE_HASH=$filehash".ToLower() | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+          $filesize = (Get-Item "setup/Result/macro-deck-${{ inputs.version }}-win.exe").Length
+          echo "FILE_SIZE=$filesize" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+        shell: pwsh
+
+      - name: Upload Windows installer to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: './setup/Result/macro-deck-${{ inputs.version }}-win.exe'
+          tag_name: "v${{ inputs.version }}"
+
+      - name: Push Update to the API
+        uses: Macro-Deck-App/Actions/push-to-update-api@main
+        with:
+          version: ${{ inputs.version }}
+          platform: "WinX64"
+          file-name: "macro-deck-${{ inputs.version }}-win.exe"
+          file-hash: ${{ env.FILE_HASH }}
+          file-size: ${{ env.FILE_SIZE }}
+          update-service-token: ${{ secrets.UPDATE_SERVICE_TOKEN }}

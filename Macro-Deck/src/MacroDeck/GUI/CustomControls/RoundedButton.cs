@@ -1,0 +1,262 @@
+﻿using System.Drawing.Drawing2D;
+using SuchByte.MacroDeck.Properties;
+using SuchByte.MacroDeck.Utils;
+
+namespace SuchByte.MacroDeck.GUI.CustomControls;
+
+public class RoundedButton : PictureBox
+{
+    public int Row { get; set; }
+    public int Column { get; set; }
+    public int Radius { get; set; } = 40;
+
+    /// <summary>
+    /// Animated GIFs assigned to the background are played via <see cref="GifAnimator"/> so they
+    /// run at the correct speed. Registration is keyed on the image instance.
+    /// </summary>
+    public override Image BackgroundImage
+    {
+        get => base.BackgroundImage;
+        set
+        {
+            if (ReferenceEquals(base.BackgroundImage, value))
+            {
+                return;
+            }
+
+            if (base.BackgroundImage != null)
+            {
+                GifAnimator.Unregister(base.BackgroundImage);
+            }
+
+            base.BackgroundImage = value;
+
+            if (value != null && GifAnimator.IsAnimated(value))
+            {
+                GifAnimator.Register(value, Invalidate);
+            }
+        }
+    }
+
+    public Image ForegroundImage
+    {
+        get => _foregroundImage;
+        set
+        {
+            // The foreground image only ever holds freshly generated label bitmaps, so the
+            // previous one can safely be disposed to avoid leaking GDI bitmaps.
+            if (_foregroundImage != null && !ReferenceEquals(_foregroundImage, value))
+            {
+                _foregroundImage.Dispose();
+            }
+
+            _foregroundImage = value;
+            Invalidate();
+        }
+    }
+
+    private Image _foregroundImage;
+
+    public bool ShowGIFIndicator
+    {
+        get => _gifIndicator;
+        set
+        {
+            _gifIndicator = value;
+            Invalidate();
+        }
+    }
+
+    private bool _gifIndicator;
+
+    public bool ShowKeyboardHotkeyIndicator
+    {
+        get => _keyboardHotkeyIndicator;
+        set
+        {
+            _keyboardHotkeyIndicator = value;
+            Invalidate();
+        }
+    }
+
+    private bool _keyboardHotkeyIndicator;
+
+    public string KeyboardHotkeyIndicatorText = "";
+
+
+    public RoundedButton()
+    {
+        SizeMode = PictureBoxSizeMode.StretchImage;
+        DoubleBuffered = true;
+        MouseEnter += OnMouseEnter;
+        MouseLeave += OnMouseLeave;
+        Padding = Padding.Empty;
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            // Dispose the foreground (label) image. The background image is NOT disposed here
+            // because some RoundedButtons display shared Properties.Resources.* bitmaps.
+            _foregroundImage?.Dispose();
+            _foregroundImage = null;
+
+            if (base.BackgroundImage != null)
+            {
+                GifAnimator.Unregister(base.BackgroundImage);
+            }
+
+            _region?.Dispose();
+            _region = null;
+        }
+
+        base.Dispose(disposing);
+    }
+
+    private void OnMouseEnter(object sender, EventArgs e)
+    {
+        Invalidate();
+        try
+        {
+            // Animated GIFs are drawn (and animated) via the background image; mirroring them onto
+            // the foreground Image would start a second, conflicting animation, so skip it.
+            if (!GifAnimator.IsAnimated(BackgroundImage))
+            {
+                Image = BackgroundImage;
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private void OnMouseLeave(object sender, EventArgs e)
+    {
+        Invalidate();
+        Image = null;
+    }
+
+
+    private Region _region;
+    private int _regionRadius = int.MinValue;
+    private Size _regionSize = Size.Empty;
+
+    /// <summary>
+    /// Applies the rounded (or rectangular) clip region, rebuilding it only when the size or
+    /// radius actually changes. Recreating it on every paint would leak GDI regions, which
+    /// matters now that animated buttons repaint many times per second.
+    /// </summary>
+    private void UpdateRegion(int radius)
+    {
+        if (_regionRadius == radius && _regionSize == Size)
+        {
+            return;
+        }
+
+        Region newRegion;
+        if (radius > 2)
+        {
+            using var path = GetFigurePath(ClientRectangle, radius);
+            newRegion = new Region(path);
+        }
+        else
+        {
+            newRegion = new Region(ClientRectangle);
+        }
+
+        Region = newRegion;
+        _region?.Dispose();
+        _region = newRegion;
+        _regionRadius = radius;
+        _regionSize = Size;
+    }
+
+    private GraphicsPath GetFigurePath(Rectangle rect, float radius)
+    {
+        var path = new GraphicsPath();
+        var curveSize = radius;
+        path.StartFigure();
+        path.AddArc(rect.X, rect.Y, curveSize, curveSize, 180, 90);
+        path.AddArc(rect.Right - curveSize, rect.Y, curveSize, curveSize, 270, 90);
+        path.AddArc(rect.Right - curveSize, rect.Bottom - curveSize, curveSize, curveSize, 0, 90);
+        path.AddArc(rect.X, rect.Bottom - curveSize, curveSize, curveSize, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    protected override void OnPaint(PaintEventArgs pe)
+    {
+        base.OnPaint(pe);
+
+        pe.Graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+
+        var radius = (int)(Radius / 100.0f * Height);
+
+        var borderColor = Color.FromArgb(35, 35, 35);
+        var borderSize = 6;
+        var smoothSize = 4;
+        var rectSurface = ClientRectangle;
+
+        if (radius > 2) //Rounded button
+        {
+            pe.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using var pathSurface = GetFigurePath(rectSurface, radius);
+            using var penSurface = new Pen(Parent.BackColor, smoothSize);
+            UpdateRegion(radius);
+            pe.Graphics.DrawPath(penSurface, pathSurface);
+            if (borderSize >= 1)
+            {
+                using var penBorder = new Pen(borderColor, borderSize);
+                pe.Graphics.DrawPath(penBorder, pathSurface);
+            }
+        }
+        else //Normal button
+        {
+            pe.Graphics.SmoothingMode = SmoothingMode.None;
+            UpdateRegion(radius);
+            if (borderSize >= 1)
+            {
+                using var penBorder = new Pen(borderColor, borderSize);
+                pe.Graphics.DrawRectangle(penBorder, 0, 0, Width, Height);
+            }
+        }
+
+        var rect = new Rectangle(0, 0, Width, Height);
+
+        if (_foregroundImage != null)
+        {
+            pe.Graphics.DrawImage(_foregroundImage, rect);
+        }
+
+        if (_gifIndicator)
+        {
+            var gifRect = new Rectangle(Width - radius / 2 - 27, 2, 25, 14);
+            pe.Graphics.DrawImage(Resources.gif, gifRect);
+        }
+
+        if (_keyboardHotkeyIndicator)
+        {
+            var hotkeyIndicatorBackground = new Rectangle(0, Height / 2 - 12, Width, 24);
+            var hotkeyIndicatorBackgroundBrush = new SolidBrush(Color.FromArgb(128, 0, 89, 184));
+            pe.Graphics.FillRectangle(hotkeyIndicatorBackgroundBrush, hotkeyIndicatorBackground);
+            var keyboardRect = new Rectangle(5, Height / 2 - 10, 20, 20);
+            pe.Graphics.DrawImage(Resources.Keyboard, keyboardRect);
+            using var gp = new GraphicsPath();
+            using var sf = new StringFormat
+            {
+                Alignment = StringAlignment.Near,
+                LineAlignment = StringAlignment.Center
+            };
+            using var font = new Font("Tahoma", 12F, FontStyle.Regular, GraphicsUnit.Point);
+            var r = new Rectangle(30, Height / 2 - 12, Width - 35, 24);
+            var p = new Pen(Color.Black, 1)
+            {
+                LineJoin = LineJoin.Round
+            };
+            gp.AddString(KeyboardHotkeyIndicatorText, font.FontFamily, (int)font.Style, font.Size, r, sf);
+            pe.Graphics.DrawPath(p, gp);
+            pe.Graphics.FillPath(Brushes.White, gp);
+        }
+    }
+}

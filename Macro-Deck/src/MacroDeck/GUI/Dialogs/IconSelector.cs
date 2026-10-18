@@ -1,0 +1,479 @@
+﻿using System.Collections.Concurrent;
+using System.Drawing.Imaging;
+using System.IO;
+using ImageMagick;
+using SuchByte.MacroDeck.GUI.CustomControls;
+using SuchByte.MacroDeck.GUI.Dialogs;
+using Serilog;
+using SuchByte.MacroDeck.Icons;
+using SuchByte.MacroDeck.Language;
+using SuchByte.MacroDeck.Profiles;
+using SuchByte.MacroDeck.Properties;
+using SuchByte.MacroDeck.StartupConfig;
+using Icon = SuchByte.MacroDeck.Icons.Icon;
+using MessageBox = SuchByte.MacroDeck.GUI.CustomControls.MessageBox;
+
+namespace SuchByte.MacroDeck.GUI;
+
+public partial class IconSelector : DialogForm
+{
+    private static readonly ILogger Logger = Log.ForContext(typeof(IconSelector));
+
+    public Icon SelectedIcon;
+    public IconPack SelectedIconPack;
+
+    private IconPack? _selectIconPack;
+
+    public IconSelector(IconPack? iconPack = null)
+    {
+        _selectIconPack = iconPack;
+        InitializeComponent();
+        btnImportIconPack.Text = LanguageManager.Strings.ImportIconPack;
+        btnExportIconPack.Text = LanguageManager.Strings.ExportIconPack;
+        btnCreateIcon.Text = LanguageManager.Strings.CreateIcon;
+        btnImport.Text = LanguageManager.Strings.ImportIcon;
+        btnDeleteIcon.Text = LanguageManager.Strings.DeleteIcon;
+        lblManaged.Text = LanguageManager.Strings.IconSelectorManagedInfo;
+        lblSizeLabel.Text = LanguageManager.Strings.Size;
+        lblTypeLabel.Text = LanguageManager.Strings.Type;
+        btnPreview.Radius = ProfileManager.CurrentProfile?.ButtonRadius ?? 0;
+        btnGenerateStatic.Text = LanguageManager.Strings.GenerateStatic;
+        iconList.IconSelected += (_, icon) => SelectIcon(icon);
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        // Release the icon bitmaps held by the grid and the preview when the dialog closes.
+        iconList.SetIcons(null);
+        btnPreview.BackgroundImage?.Dispose();
+        btnPreview.BackgroundImage = null;
+        base.OnFormClosed(e);
+    }
+
+    private void LoadIcons(IconPack iconPack, bool scrollDown = false)
+    {
+        iconList.Radius = ProfileManager.CurrentProfile?.ButtonRadius ?? 0;
+        iconList.SetIcons(iconPack.Icons);
+        if (scrollDown)
+        {
+            iconList.ScrollToBottom();
+        }
+    }
+
+    private void SelectIcon(Icon icon)
+    {
+        var previewImage = icon.IconImage;
+
+        btnGenerateStatic.Visible = previewImage.RawFormat.ToString().ToLower() == "gif";
+
+        btnPreview.BackgroundImage?.Dispose();
+        btnPreview.BackgroundImage = previewImage;
+        lblSize.Text = $@"{Encoding.Unicode.GetByteCount(icon.IconBase64) / 1000:n0} kByte";
+        lblType.Text = previewImage.RawFormat.ToString().ToUpper();
+
+        SelectedIconPack = IconManager.GetIconPackByName(iconPacksBox.Text);
+        SelectedIcon = icon;
+        iconList.SelectedIcon = icon;
+    }
+
+    private void BtnImport_Click(object sender, EventArgs e)
+    {
+        var openFileDialog = new OpenFileDialog
+        {
+            Title = "Import icon",
+            CheckFileExists = true,
+            CheckPathExists = true,
+            DefaultExt = "png",
+            Multiselect = true,
+            Filter =
+                "Image files|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp;*.tiff;*.tif;*.ico;*.heic;*.heif;*.avif;*.svg|All files|*.*"
+        };
+        if (openFileDialog.ShowDialog() != DialogResult.OK)
+        {
+            return;
+        }
+
+        var iconPack = IconManager.GetIconPackByName(iconPacksBox.Text);
+
+        var isGif = Path.GetExtension(openFileDialog.FileNames.FirstOrDefault())?.ToLower() == "gif";
+
+        var iconImportQuality = new IconImportQuality(isGif);
+        if (iconImportQuality.ShowDialog() != DialogResult.OK)
+        {
+            return;
+        }
+
+        Task.Run(() => SpinnerDialog.SetVisisble(true, this));
+        var icons = new List<Image>();
+
+        Task.Run(() =>
+        {
+            Logger.Information($"Starting importing {openFileDialog.FileNames.Length} icon(s)");
+
+            // Decoding and resizing are CPU-bound and independent per file, so process the files
+            // in parallel. The results are collected thread-safely and added below on this thread.
+            var pixels = iconImportQuality.Pixels;
+            var loaded = new ConcurrentBag<Image>();
+            Parallel.ForEach(openFileDialog.FileNames, file =>
+            {
+                try
+                {
+                    loaded.Add(LoadImportImage(file, pixels));
+                    Logger.Debug("Image loaded");
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error(ex, "Failed to load image {File}", file);
+                }
+            });
+
+            icons.AddRange(loaded);
+
+            openFileDialog.Dispose();
+            iconImportQuality.Dispose();
+
+            if (iconPack == null)
+            {
+                Logger.Error("Icon pack was null");
+                SpinnerDialog.SetVisisble(false, this);
+                return;
+            }
+
+            Logger.Information($"Adding {icons.Count} icons to {iconPack.Name}");
+            var gifIcons = new List<Image>();
+            gifIcons.AddRange(icons.FindAll(x => x.RawFormat.ToString().ToLower() == "gif").ToArray());
+            var convertGifToStatic = false;
+            if (gifIcons.Count > 0)
+            {
+                Invoke(() =>
+                {
+                    using var msgBox = new MessageBox();
+                    convertGifToStatic = msgBox.ShowDialog(LanguageManager.Strings.AnimatedGifImported,
+                            LanguageManager.Strings.GenerateStaticIcon,
+                            MessageBoxButtons.YesNo) ==
+                        DialogResult.Yes;
+                });
+                Logger.Information("Convert gif to static? " + convertGifToStatic);
+            }
+
+            foreach (var icon in icons)
+            {
+                IconManager.AddIconImage(iconPack, icon);
+                if (convertGifToStatic)
+                {
+                    using var ms = new MemoryStream();
+                    icon.Save(ms, ImageFormat.Png);
+                    using var iconStatic = Image.FromStream(ms);
+                    IconManager.AddIconImage(iconPack, iconStatic);
+                }
+
+                icon.Dispose();
+            }
+
+            Invoke(() => LoadIcons(iconPack, true));
+            Logger.Information("Icons successfully imported");
+            SpinnerDialog.SetVisisble(false, this);
+        });
+    }
+
+    /// <summary>
+    /// Loads an icon for import as a GDI+ <see cref="Image"/>, optionally resizing it to a square
+    /// of <paramref name="pixels"/>. ImageMagick handles decoding so a wide range of formats
+    /// (WebP, TIFF, ICO, HEIC/HEIF, AVIF, SVG, ...) is supported; the result is re-encoded to a
+    /// format GDI+ can read (GIF preserves animation, PNG for stills).
+    /// </summary>
+    private static Image LoadImportImage(string file, int pixels)
+    {
+        // Unmodified imports of the common formats can be read directly by GDI+ (this also keeps
+        // animated GIFs intact). Anything GDI+ cannot read falls through to ImageMagick below.
+        if (pixels == -1)
+        {
+            try
+            {
+                return Image.FromFile(file);
+            }
+            catch
+            {
+                // Not a GDI+-supported format; decode via ImageMagick instead.
+            }
+        }
+
+        using var collection = new MagickImageCollection(new FileInfo(file));
+
+        // Coalesce only matters for multi-frame images (it flattens frame disposal); skipping it
+        // for stills avoids needless work.
+        if (collection.Count > 1)
+        {
+            collection.Coalesce();
+        }
+
+        if (pixels != -1)
+        {
+            foreach (var image in collection)
+            {
+                image.Resize((uint)pixels, (uint)pixels);
+                image.Crop((uint)pixels, (uint)pixels);
+            }
+        }
+
+        // The stream is intentionally not disposed: GDI+ keeps a reference to it for the lifetime
+        // of the returned image. It is released when the caller disposes the image.
+        var ms = new MemoryStream();
+        if (collection.Count > 1)
+        {
+            collection.Write(ms, MagickFormat.Gif);
+        }
+        else
+        {
+            collection[0].Format = MagickFormat.Png;
+            collection[0].Write(ms);
+        }
+
+        ms.Position = 0;
+        return Image.FromStream(ms);
+    }
+
+    private void BtnOk_Click(object sender, EventArgs e)
+    {
+        if (SelectedIcon != null)
+        {
+            DialogResult = DialogResult.OK;
+        }
+
+        Close();
+    }
+
+    private void IconSelector_Shown(object sender, EventArgs e)
+    {
+        Application.DoEvents();
+        LoadIconPacks();
+    }
+
+    private void LoadIconPacks()
+    {
+        Invoke(() => iconPacksBox.Items.Clear());
+
+        foreach (var iconPack in IconManager.IconPacks)
+        {
+            Invoke(new Action(() => iconPacksBox.Items.Add(iconPack.Name)));
+        }
+
+        if (Settings.Default.IconSelectorLastIconPack != null && IconManager.IconPacks.Count > 0)
+        {
+            Invoke(() =>
+            {
+                if (_selectIconPack != null)
+                {
+                    if (iconPacksBox.Items.Contains(_selectIconPack.Name))
+                    {
+                        iconPacksBox.SelectedIndex = iconPacksBox.FindStringExact(_selectIconPack.Name);
+                        return;
+                    }
+                }
+
+                iconPacksBox.SelectedIndex = iconPacksBox.Items.Contains(Settings.Default.IconSelectorLastIconPack)
+                    ? iconPacksBox.FindStringExact(Settings.Default.IconSelectorLastIconPack)
+                    : 0;
+            });
+        }
+
+        IconPacksBox_SelectedIndexChanged(null, EventArgs.Empty);
+    }
+
+    private void IconPacksBox_SelectedIndexChanged(object sender, EventArgs e)
+    {
+        if (InvokeRequired)
+        {
+            Invoke(() => IconPacksBox_SelectedIndexChanged(sender, e));
+            return;
+        }
+
+        var iconPack = IconManager.GetIconPackByName(iconPacksBox.Text);
+        if (iconPack == null)
+        {
+            btnImport.Visible = false;
+            btnCreateIcon.Visible = false;
+            btnDeleteIcon.Visible = false;
+            btnExportIconPack.Visible = false;
+            lblManaged.Visible = false;
+            return;
+        }
+
+        Settings.Default.IconSelectorLastIconPack = iconPack.Name;
+        Settings.Default.Save();
+        SelectedIconPack = iconPack;
+        btnImport.Visible = !iconPack.ExtensionStoreManaged;
+        btnCreateIcon.Visible = !iconPack.ExtensionStoreManaged;
+        btnDeleteIcon.Visible = !iconPack.ExtensionStoreManaged;
+        btnExportIconPack.Visible = !iconPack.ExtensionStoreManaged;
+        lblManaged.Visible = iconPack.ExtensionStoreManaged;
+
+        LoadIcons(iconPack);
+    }
+
+    private void BtnDeleteIconPack_Click(object sender, EventArgs e)
+    {
+        using var messageBox = new MessageBox();
+        var iconPack = IconManager.GetIconPackByName(iconPacksBox.Text);
+        if (messageBox.ShowDialog(LanguageManager.Strings.AreYouSure,
+                string.Format(LanguageManager.Strings.SelectedIconPackWillBeDeleted, iconPack.Name),
+                MessageBoxButtons.YesNo) ==
+            DialogResult.Yes)
+        {
+            IconManager.DeleteIconPack(iconPack);
+            btnPreview.BackgroundImage?.Dispose();
+            btnPreview.BackgroundImage = null;
+            SelectedIcon = null;
+            lblSize.Text = "";
+            lblType.Text = "";
+            Task.Run(LoadIconPacks);
+        }
+    }
+
+    private void BtnCreateIconPack_Click(object sender, EventArgs e)
+    {
+        using var createIconPackDialog = new CreateIconPack();
+        if (createIconPackDialog.ShowDialog() == DialogResult.OK)
+        {
+            Task.Run(LoadIconPacks);
+            iconPacksBox.SelectedItem = createIconPackDialog.IconPackName;
+        }
+    }
+
+    private void BtnImportIconPack_Click(object sender, EventArgs e)
+    {
+        using var openFileDialog = new OpenFileDialog
+        {
+            Title = "Import icon pack",
+            CheckFileExists = true,
+            CheckPathExists = true,
+            DefaultExt = ".macroDeckIconPack",
+            Filter = "Macro Deck Icon Pack (*.macroDeckIconPack)|*.macroDeckIconPack|Zip Archive (*.zip)|*.zip"
+        };
+        if (openFileDialog.ShowDialog() == DialogResult.OK)
+        {
+            var importedIconPack = IconManager.InstallIconPackZip(openFileDialog.FileName);
+            if (importedIconPack != null)
+            {
+                _selectIconPack = importedIconPack;
+                LoadIconPacks();
+            }
+        }
+    }
+
+    private void BtnExportIconPack_Click(object sender, EventArgs e)
+    {
+        using var exportIconPackDialog = new ExportIconPackDialog(SelectedIconPack);
+        if (exportIconPackDialog.ShowDialog() == DialogResult.OK)
+        {
+            using var folderBrowserDialog = new FolderBrowserDialog();
+            if (folderBrowserDialog.ShowDialog() == DialogResult.OK)
+            {
+                Cursor.Current = Cursors.WaitCursor;
+                IconManager.SaveIconPack(SelectedIconPack);
+                IconManager.ExportIconPack(SelectedIconPack, folderBrowserDialog.SelectedPath);
+                Cursor.Current = Cursors.Default;
+                using var msgBox = new MessageBox();
+                msgBox.ShowDialog(LanguageManager.Strings.ExportIconPack,
+                    string.Format(LanguageManager.Strings.XSuccessfullyExportedToX,
+                        SelectedIconPack.Name,
+                        folderBrowserDialog.SelectedPath),
+                    MessageBoxButtons.OK);
+            }
+        }
+    }
+
+    private void BtnDeleteIcon_Click(object sender, EventArgs e)
+    {
+        if (SelectedIcon == null || SelectedIconPack == null)
+        {
+            return;
+        }
+
+        using var messageBox = new MessageBox();
+        if (messageBox.ShowDialog(LanguageManager.Strings.AreYouSure,
+                string.Format(LanguageManager.Strings.SelectedIconWillBeDeleted, SelectedIconPack.Name),
+                MessageBoxButtons.YesNo) ==
+            DialogResult.Yes)
+        {
+            IconManager.DeleteIcon(SelectedIconPack, SelectedIcon);
+            btnPreview.BackgroundImage?.Dispose();
+            btnPreview.BackgroundImage = null;
+            btnPreview.Image = null;
+            SelectedIcon = null;
+            lblSize.Text = "";
+            lblType.Text = "";
+            LoadIcons(SelectedIconPack);
+        }
+    }
+
+    private void BtnCreateIcon_Click(object sender, EventArgs e)
+    {
+        using var iconCreator = new IconCreator();
+        if (iconCreator.ShowDialog() == DialogResult.OK)
+        {
+            using var iconImportQuality = new IconImportQuality();
+            if (iconImportQuality.ShowDialog() == DialogResult.OK)
+            {
+                Image icon = null;
+                if (iconImportQuality.Pixels == -1)
+                {
+                    icon = iconCreator.Image;
+                }
+                else
+                {
+                    iconCreator.Image.Save(Path.Combine(ApplicationPaths.TempDirectoryPath, "iconcreator"));
+
+                    using var collection = new MagickImageCollection(new FileInfo(Path.GetFullPath(Path.Combine(
+                        ApplicationPaths.TempDirectoryPath,
+                        "iconcreator"))));
+                    Cursor.Current = Cursors.WaitCursor;
+                    collection.Coalesce();
+                    foreach (var image in collection)
+                    {
+                        image.Resize((uint)iconImportQuality.Pixels, (uint)iconImportQuality.Pixels);
+                        image.Quality = 50;
+                        image.Crop((uint)iconImportQuality.Pixels, (uint)iconImportQuality.Pixels);
+                    }
+
+                    try
+                    {
+                        collection.Write(new FileInfo(Path.GetFullPath(Path.Combine(ApplicationPaths.TempDirectoryPath,
+                            "iconcreator.resized"))));
+                        var imageBytes = File.ReadAllBytes(Path.Combine(ApplicationPaths.TempDirectoryPath,
+                            "iconcreator.resized"));
+                        using var ms = new MemoryStream(imageBytes);
+                        icon = Image.FromStream(ms);
+                    }
+                    catch
+                    {
+                    }
+
+                    Cursor.Current = Cursors.Default;
+                }
+
+                var iconPack = IconManager.GetIconPackByName(iconPacksBox.Text);
+                IconManager.AddIconImage(iconPack, icon);
+                LoadIcons(iconPack, true);
+            }
+        }
+    }
+
+
+    private void btnDownloadIcon_Click(object sender, EventArgs e)
+    {
+    }
+
+    private void BtnGenerateStatic_Click(object sender, EventArgs e)
+    {
+        var iconPack = IconManager.GetIconPackByName(iconPacksBox.Text);
+        using var icon = SelectedIcon.IconImage;
+        using var ms = new MemoryStream();
+        icon.Save(ms, ImageFormat.Png);
+        ms.Position = 0;
+        using var iconStatic = Image.FromStream(ms);
+        var addedIcon = IconManager.AddIconImage(iconPack, iconStatic);
+        SelectIcon(addedIcon);
+        LoadIcons(iconPack, true);
+    }
+}

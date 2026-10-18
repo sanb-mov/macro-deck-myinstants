@@ -1,0 +1,40 @@
+<div [ngStyle]="{'border-radius': borderRadius}" class="slider-widget-wrapper" [class]="styleClass">
+  <div class="title">{{ content?.displayName }}</div>
+
+  <div #track
+    class="track"
+    (pointerdown)="onPointerDown($event)"
+    (pointermove)="onPointerMove($event)"
+    (pointerup)="onPointerUp($event)"
+    (pointercancel)="onPointerUp($event)">
+    <div class="fill" [ngStyle]="fillStyle"></div>
+    @if (showThumb) {
+      <div class="thumb" [ngStyle]="thumbStyle"></div>
+    }
+    @if (showKnob) {
+      <div class="knob" [ngStyle]="knobStyle"></div>
+    }
+  </div>
+
+  <div class="value">{{ percentText }}</div>
+
+  @if (content?.supportsMute) {
+    @if (styleClass === 'capsule') {
+      <div class="mute-icon" [class.muted]="content?.muted" (click)="toggleMute($event)">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/>
+          @if (content?.muted) {
+            <path d="M16 8l6 8M22 8l-6 8" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>
+          } @else {
+            <path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"
+              stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>
+          }
+        </svg>
+      </div>
+    } @else {
+      <div class="mute" [class.muted]="content?.muted" (click)="toggleMute($event)">
+        {{ content?.muted ? 'Muted' : 'Mute' }}
+      </div>
+    }
+  }
+</div>

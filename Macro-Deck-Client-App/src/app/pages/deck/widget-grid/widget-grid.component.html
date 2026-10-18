@@ -1,0 +1,14 @@
+<div #widgetsWrapper class="widgets-wrapper ion-color-light">
+  @for (_ of [].constructor(countTotalWidgets()); track _; let widgetIndex = $index) {
+    @if (getWidgetFromIndex(widgetIndex); as widget) {
+      <div [ngStyle]="getWidgetStyle(widgetIndex)"
+        class="widget">
+        <app-widget-content
+          [ngStyle]="getWidgetContentStyle()"
+          class="widget-content-wrapper"
+          [data]="widget">
+        </app-widget-content>
+      </div>
+    }
+  }
+</div>
